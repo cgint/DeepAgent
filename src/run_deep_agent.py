@@ -63,6 +63,7 @@ from utils.utils import (
     extract_between,
     format_search_results,
 )
+from src.enrichments.memory_processing import extract_knowledge_triplets
 from tools.tool_manager import ToolManager
 
 
@@ -567,6 +568,7 @@ async def generate_main_reasoning_sequence(
                     seq['output'] += append_text
                     total_tokens += len(append_text.split())
                 else:
+                    # 1. Get original memory summaries
                     episode_memory, working_memory, tool_memory = await run_thought_folding(
                         client=aux_client,
                         tokenizer=aux_tokenizer,
@@ -577,13 +579,37 @@ async def generate_main_reasoning_sequence(
                         interactions=seq['interactions'],
                         available_tools=seq['available_tools'],
                     )
-                    append_text = f"Memory of previous folded thoughts:\n\nEpisode Memory:\n{episode_memory}\n\nWorking Memory:\n{working_memory}\n\nTool Memory:\n{tool_memory}"
+                    
+                    # 2. Extract knowledge triplets
+                    knowledge_graph = await extract_knowledge_triplets(
+                        client=aux_client,
+                        tokenizer=aux_tokenizer,
+                        semaphore=semaphore,
+                        args=args,
+                        question=seq['item']['Question'],
+                        current_output=seq['output'],
+                        generate_response_func=generate_response
+                    )
+
+                    # 3. Format the knowledge graph for prompt injection
+                    kg_text = "\n".join([f"- ({triplet[0]}) -[{triplet[1]}]-> ({triplet[2]})" for triplet in knowledge_graph])
+                    
+                    # 4. Combine summaries and KG into the new prompt
+                    append_text = (
+                        f"Memory of previous folded thoughts:\n\n"
+                        f"Episode Memory:\n{episode_memory}\n\n"
+                        f"Working Memory:\n{working_memory}\n\n"
+                        f"Tool Memory:\n{tool_memory}\n\n"
+                        f"**Inferred Knowledge Graph:**\n{kg_text}"
+                    )
+
                     seq['prompt'] = seq['original_prompt'].replace("Now, begin your reasoning for", f"{append_text}\n\nNow, begin your reasoning for")
                     seq['interactions'].append({
                         "type": "thought_folding",
                         "episode_memory": episode_memory,
                         "working_memory": working_memory,
                         "tool_memory": tool_memory,
+                        "knowledge_graph": knowledge_graph
                     })
                     print(seq['interactions'][-1])
                     total_tokens = len(seq['prompt'].split())

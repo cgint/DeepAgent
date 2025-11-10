@@ -14,3 +14,5 @@ __pycache__/
 .env.production.local
 .env.development
 .env.test
+data-run/
+tokenizers/
